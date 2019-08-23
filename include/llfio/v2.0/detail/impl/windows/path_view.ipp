@@ -27,6 +27,43 @@ Distributed under the Boost Software License, Version 1.0.
 
 LLFIO_V2_NAMESPACE_BEGIN
 
+LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<path_view_component::char8_t[]> path_view_component::_ansi_path_to_utf8(basic_string_view<char8_t> &out) noexcept
+{
+  windows_nt_kernel::init();
+  using namespace windows_nt_kernel;
+  ANSI_STRING astr;
+  astr.Buffer = (char *) _charstr;
+  astr.Length = astr.MaximumLength = _length;
+  UNICODE_STRING ustr;
+  NTSTATUS ntstat = AreFileApisANSI() ? RtlAnsiStringToUnicodeString(&ustr, &astr, true) : RtlOemStringToUnicodeString(&ustr, &astr, true);
+  if(ntstat < 0)
+  {
+    return nullptr;
+  }
+  unsigned long maxbytecount = 0, actualbytecount = 0;
+  RtlUnicodeToUTF8N(nullptr, maxbytecount, &actualbytecount, ustr.Buffer, ustr.Length);
+  std::unique_ptr<char8_t[]> ret;
+  auto *p = new(std::nothrow) char8_t[actualbytecount + 1];
+  if(nullptr != p)
+  {
+    ret = std::unique_ptr<char8_t[]>(p);
+    maxbytecount = actualbytecount;
+    ntstat = RtlUnicodeToUTF8N((char *) p, maxbytecount, &actualbytecount, ustr.Buffer, ustr.Length);
+    if(ntstat < 0)
+    {
+      ret.reset();
+    }
+    else
+    {
+      p[actualbytecount] = 0;
+      p[maxbytecount] = 0;
+      out = {p, actualbytecount      };
+    }
+  }
+  RtlFreeUnicodeString(&ustr);
+  return ret;
+}
+
 LLFIO_HEADERS_ONLY_MEMFUNC_SPEC void path_view::c_str::_from_utf8(const path_view &view) noexcept
 {
   windows_nt_kernel::init();
