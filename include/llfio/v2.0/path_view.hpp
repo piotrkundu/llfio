@@ -27,6 +27,7 @@ Distributed under the Boost Software License, Version 1.0.
 
 #include "config.hpp"
 
+#include <iterator>
 #include <locale>
 #include <memory>  // for unique_ptr
 
@@ -91,6 +92,7 @@ namespace detail
   template <> struct is_path_view_component_source_type<char16_t> : std::true_type
   {
   };
+  class path_view_iterator;
 }  // namespace detail
 
 class path_view;
@@ -101,6 +103,7 @@ class path_view;
 class LLFIO_DECL path_view_component
 {
   friend class path_view;
+  friend class detail::path_view_iterator;
 
 public:
   //! The preferred separator type
@@ -227,24 +230,24 @@ private:
                                        basic_string_view<char>((const char *) _bytestr, _length).find(preferred_separator, startidx)));
 #endif
   }
-  constexpr auto _find_last_sep() const noexcept
+  constexpr auto _find_last_sep(size_t endidx = _npos) const noexcept
   {
 #ifdef _WIN32
-    return _utf8 ? basic_string_view<char8_t>(_char8str, _length).find_last_of((const char8_t *) "/\\")  //
+    return _utf8 ? basic_string_view<char8_t>(_char8str, _length).find_last_of((const char8_t *) "/\\", endidx)  //
                    :
-                   (_utf16 ? basic_string_view<char16_t>(_char16str, _length).find_last_of((const char16_t *) L"/\\")  //
+                   (_utf16 ? basic_string_view<char16_t>(_char16str, _length).find_last_of((const char16_t *) L"/\\", endidx)  //
                              :
-                             (_wchar ? basic_string_view<wchar_t>(_wcharstr, _length).find_last_of(L"/\\")  //
+                             (_wchar ? basic_string_view<wchar_t>(_wcharstr, _length).find_last_of(L"/\\", endidx)  //
                                        :
-                                       basic_string_view<char>((const char *) _bytestr, _length).find_last_of("/\\")));
+                                       basic_string_view<char>((const char *) _bytestr, _length).find_last_of("/\\", endidx)));
 #else
-    return _utf8 ? basic_string_view<char8_t>(_char8str, _length).rfind(preferred_separator)  //
+    return _utf8 ? basic_string_view<char8_t>(_char8str, _length).rfind(preferred_separator, endidx)  //
                    :
-                   (_utf16 ? basic_string_view<char16_t>(_char16str, _length).rfind(preferred_separator)  //
+                   (_utf16 ? basic_string_view<char16_t>(_char16str, _length).rfind(preferred_separator, endidx)  //
                              :
-                             (_wchar ? basic_string_view<wchar_t>(_wcharstr, _length).rfind(preferred_separator)  //
+                             (_wchar ? basic_string_view<wchar_t>(_wcharstr, _length).rfind(preferred_separator, endidx)  //
                                        :
-                                       basic_string_view<char>((const char *) _bytestr, _length).rfind(preferred_separator)));
+                                       basic_string_view<char>((const char *) _bytestr, _length).rfind(preferred_separator, endidx)));
 #endif
   }
 
@@ -342,7 +345,8 @@ private:
   LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<char8_t[]> _ansi_path_to_utf8(basic_string_view<char8_t> &out) noexcept;
   static int _compare(basic_string_view<char> a, basic_string_view<char> b) noexcept { return a.compare(b); }
   template <class CharT> static int _compare(basic_string_view<CharT> a, basic_string_view<char> b) noexcept { return -_compare(b, a); }
-  template <class CharT> static int _compare(basic_string_view<char> a, basic_string_view<CharT> b) noexcept { 
+  template <class CharT> static int _compare(basic_string_view<char> a, basic_string_view<CharT> b) noexcept
+  {
     // Convert a from native narrow encoding to utf8
     basic_string_view<char8_t> a_utf8;
     auto h = _ansi_path_to_utf8(a_utf8);
@@ -373,7 +377,7 @@ private:
       if(std::codecvt_base::partial == a_result && a_out_end == a_out + codepoints_at_a_time)
       {
         // Needs one more character from input
-        a_result = convert_a.out(a_state, a_ptr, a_ptr + 1, a_ptr, a_out + codepoints_at_a_time, a_out + codepoints_at_a_time+1, a_out_end);
+        a_result = convert_a.out(a_state, a_ptr, a_ptr + 1, a_ptr, a_out + codepoints_at_a_time, a_out + codepoints_at_a_time + 1, a_out_end);
         assert(std::codecvt_base::partial != a_result);
       }
       if(std::codecvt_base::error == a_result)
@@ -392,7 +396,7 @@ private:
         assert(false);
         return 99;
       }
-      if((a_out_end-a_out)<(b_out_end-b_out))
+      if((a_out_end - a_out) < (b_out_end - b_out))
       {
         return -2;
       }
@@ -403,12 +407,12 @@ private:
 #if !defined(__CHAR8_TYPE__) && __cplusplus < 20200000
       // Before C++ 20, no facility to char_traits::compare utf8, so convert to utf32
       const char *a_out_end_ = a_out_end, *b_out_end_ = b_out_end;
-      char32_t a32[codepoints_at_a_time+1], b32[codepoints_at_a_time+1], *a32_end = a32, *b32_end = b32;
+      char32_t a32[codepoints_at_a_time + 1], b32[codepoints_at_a_time + 1], *a32_end = a32, *b32_end = b32;
       std::mbstate_t a32_state{}, b32_state{};
       auto &convert32 = _to_utf8(basic_string_view<char32_t>());
-      convert32.in(a32_state, a_out, a_out_end, a_out_end_, a32, a32 + codepoints_at_a_time+1, a32_end);
-      convert32.in(b32_state, b_out, b_out_end, b_out_end_, b32, b32 + codepoints_at_a_time+1, b32_end);
-      if((a32_end-a32) < (b32_end-b32))
+      convert32.in(a32_state, a_out, a_out_end, a_out_end_, a32, a32 + codepoints_at_a_time + 1, a32_end);
+      convert32.in(b32_state, b_out, b_out_end, b_out_end_, b32, b32 + codepoints_at_a_time + 1, b32_end);
+      if((a32_end - a32) < (b32_end - b32))
       {
         return -2;
       }
@@ -463,6 +467,7 @@ public:
   LLFIO_TREQUIRES(LLFIO_TPRED(path_view_component::_is_constructible<Char>))
   constexpr int compare(const basic_string_view<Char> s) const noexcept { return compare(path_view_component(s)); }
 };
+
 
 /*! \class path_view
 \brief A borrowed view of a path. A lightweight trivial-type alternative to
@@ -551,10 +556,15 @@ maximum compatibility you should still use the Win32 API.
 class LLFIO_DECL path_view
 {
 public:
-  // const_iterator
-  // iterator
-  // reverse_iterator
-  // const_reverse_iterator
+  friend class detail::path_view_iterator;
+  //! Const iterator type
+  using const_iterator = detail::path_view_iterator;
+  //! iterator type
+  using iterator = const_iterator;
+  //! Reverse iterator
+  using reverse_iterator = std::reverse_iterator<iterator>;
+  //! Const reverse iterator
+  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
   //! Size type
   using size_type = std::size_t;
   //! Difference type
@@ -736,6 +746,19 @@ public:
   }
 #endif
 
+  //! Returns an iterator to the first path component
+  constexpr inline const_iterator cbegin() const noexcept;
+  //! Returns an iterator to the first path component
+  constexpr inline const_iterator begin() const noexcept;
+  //! Returns an iterator to the first path component
+  constexpr inline iterator begin() noexcept;
+  //! Returns an iterator to after the last path component
+  constexpr inline const_iterator cend() const noexcept;
+  //! Returns an iterator to after the last path component
+  constexpr inline const_iterator end() const noexcept;
+  //! Returns an iterator to after the last path component
+  constexpr inline iterator end() noexcept;
+
   //! Returns a copy of this view with the end adjusted to match the final separator.
   constexpr path_view remove_filename() const noexcept
   {
@@ -880,7 +903,7 @@ public:
   the Windows conversion APIs, which is extremely expensive, if not comparing `char`-`char`
   views.
   */
-  constexpr int compare(const path_view &p) const noexcept { todo iterate and compare; }
+  constexpr inline int compare(const path_view &o) const noexcept;
   //! \overload
   LLFIO_TEMPLATE(class Char)
   LLFIO_TREQUIRES(LLFIO_TPRED(path_view_component::_is_constructible<Char>))
@@ -889,9 +912,6 @@ public:
   LLFIO_TEMPLATE(class Char)
   LLFIO_TREQUIRES(LLFIO_TPRED(path_view_component::_is_constructible<Char>))
   constexpr int compare(const basic_string_view<Char> s) const noexcept { return _state.compare(s); }
-
-  // iterator begin() const;
-  // iterator end() const;
 
   //! Instantiate from a `path_view` to get a zero terminated path suitable for feeding to the kernel
   struct LLFIO_DECL c_str
@@ -1022,6 +1042,186 @@ inline std::ostream &operator<<(std::ostream &s, const path_view &v)
 {
   return s << v.path();
 }
+
+namespace detail
+{
+  template <class T> class fake_pointer
+  {
+    T _v;
+
+  public:
+    constexpr fake_pointer(T o)
+        : _v(o)
+    {
+    }
+    constexpr const T &operator*() const noexcept { return _v; }
+    constexpr T &operator*() noexcept { return _v; }
+    constexpr const T *operator->() const noexcept { return &_v; }
+    constexpr T *operator->() noexcept { return &_v; }
+  };
+  class path_view_iterator
+  {
+    friend class path_view;
+
+  public:
+    //! Value type
+    using value_type = path_view_component;
+    //! Reference type
+    using reference = value_type;
+    //! Const reference type
+    using const_reference = const value_type;
+    //! Pointer type
+    using pointer = fake_pointer<value_type>;
+    //! Const pointer type
+    using const_pointer = fake_pointer<const value_type>;
+    //! Size type
+    using size_type = size_t;
+
+  private:
+    const path_view *_parent{nullptr};
+    size_type _begin{0}, _end{0};
+
+    static constexpr auto _npos = string_view::npos;
+    constexpr bool _is_end() const noexcept { return (nullptr == _parent) || _parent->native_size() == _begin; }
+    constexpr value_type _get() const noexcept
+    {
+      assert(_parent != nullptr);
+      return _parent->_state._invoke([this](const auto &v) {
+        assert(_begin + _end <= v.size());
+        return path_view_component(v.data() + _begin, _end, (_begin + _end == v.size()) ? _parent->_state._zero_terminated : false);
+      });
+    }
+    constexpr void _inc() noexcept
+    {
+      _begin = _end;
+      _end = _parent->_state._find_first_sep(_begin + 1);
+      if(_npos == _end)
+      {
+        _parent->_state._invoke([this](const auto &v) { _end = v.size(); });
+      }
+    }
+    constexpr void _dec() noexcept
+    {
+      _end = _begin;
+      _begin = _parent->_state._find_last_sep(_end - 1);
+      if(_npos == _begin)
+      {
+        _begin = 0;
+      }
+    }
+
+    constexpr path_view_iterator(const path_view *p, bool end)
+        : _parent(p)
+        , _begin(end ? p->native_size() : 0)
+        , _end(end ? p->native_size() : 0)
+    {
+      if(!end)
+      {
+        _inc();
+      }
+    }
+
+  public:
+    path_view_iterator() = default;
+    path_view_iterator(const path_view_iterator &) = default;
+    path_view_iterator(path_view_iterator &&) = default;
+    path_view_iterator &operator=(const path_view_iterator &) = default;
+    path_view_iterator &operator=(path_view_iterator &&) = default;
+    ~path_view_iterator() = default;
+
+    constexpr const_reference operator*() const noexcept { return _get(); }
+    constexpr reference operator*() noexcept { return _get(); }
+    constexpr const_pointer operator->() const noexcept { return _get(); }
+    constexpr pointer operator->() noexcept { return _get(); }
+
+    constexpr bool operator!=(path_view_iterator o) const noexcept
+    {
+      if(_is_end() && o._is_end())
+      {
+        return false;
+      }
+      return _parent != o._parent || _begin != o._begin || _end != o._end;
+    }
+    constexpr bool operator==(path_view_iterator o) const noexcept
+    {
+      if(_is_end() && o._is_end())
+      {
+        return true;
+      }
+      return _parent == o._parent && _begin == o._begin && _end == o._end;
+    }
+
+    constexpr path_view_iterator &operator--() noexcept
+    {
+      _dec();
+      return *this;
+    }
+    constexpr path_view_iterator operator--(int) noexcept
+    {
+      auto self(*this);
+      _dec();
+      return self;
+    }
+    constexpr path_view_iterator &operator++() noexcept
+    {
+      _inc();
+      return *this;
+    }
+    constexpr path_view_iterator operator++(int) noexcept
+    {
+      auto self(*this);
+      _inc();
+      return self;
+    }
+  };
+}  // namespace detail
+
+constexpr inline path_view::const_iterator path_view::cbegin() const noexcept
+{
+  return const_iterator(this, false);
+}
+constexpr inline path_view::const_iterator path_view::cend() const noexcept
+{
+  return const_iterator(this, true);
+}
+constexpr inline path_view::const_iterator path_view::begin() const noexcept
+{
+  return cbegin();
+}
+constexpr inline path_view::iterator path_view::begin() noexcept
+{
+  return cbegin();
+}
+constexpr inline path_view::const_iterator path_view::end() const noexcept
+{
+  return cend();
+}
+constexpr inline path_view::iterator path_view::end() noexcept
+{
+  return cend();
+}
+constexpr inline int path_view::compare(const path_view &o) const noexcept
+{
+  auto it1 = begin(), it2 = o.begin();
+  for(; it1 != end() && it2 != o.end(); ++it1, ++it2)
+  {
+    int res = it1->compare(*it2);
+    if(res != 0)
+    {
+      return res;
+    }
+  }
+  if(it1 == end() && it2 != o.end())
+  {
+    return -1;
+  }
+  if(it1 != end() && it2 == o.end())
+  {
+    return 1;
+  }
+  return 0;  // identical
+}
+
 
 #ifndef NDEBUG
 static_assert(std::is_trivially_copyable<path_view>::value, "path_view is not a trivially copyable!");
