@@ -75,7 +75,7 @@ LLFIO_HEADERS_ONLY_MEMFUNC_SPEC result<symlink_handle> symlink_handle::symlink(c
     ntflags |= 0x040 /*FILE_NON_DIRECTORY_FILE*/;  // do not open a directory
     IO_STATUS_BLOCK isb = make_iostatus();
 
-    path_view::c_str zpath(path, true);
+    path_view::c_str<> zpath(path, true);
     UNICODE_STRING _path{};
     _path.Buffer = const_cast<wchar_t *>(zpath.buffer);
     _path.MaximumLength = (_path.Length = static_cast<USHORT>(zpath.length * sizeof(wchar_t))) + sizeof(wchar_t);
@@ -126,7 +126,7 @@ LLFIO_HEADERS_ONLY_MEMFUNC_SPEC result<symlink_handle> symlink_handle::symlink(c
     }
     // required to open a symlink
     attribs |= FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
-    path_view::c_str zpath(path, false);
+    path_view::c_str<> zpath(path, false);
     if(INVALID_HANDLE_VALUE == (nativeh.h = CreateFileW_(zpath.buffer, access, fileshare, nullptr, creation, attribs, nullptr)))  // NOLINT
     {
       DWORD errcode = GetLastError();
@@ -212,7 +212,7 @@ result<symlink_handle::const_buffers_type> symlink_handle::write(symlink_handle:
   auto *buffer = req.kernelbuffer.empty() ? alloca(buffersize) : req.kernelbuffer.data();
   memset(buffer, 0, sizeof(REPARSE_DATA_BUFFER));
   auto *rpd = (REPARSE_DATA_BUFFER *) buffer;
-  path_view::c_str zpath(req.buffers.path(), true);
+  path_view::c_str<> zpath(req.buffers.path(), true);
   switch(req.buffers.type())
   {
   case symlink_type::none:

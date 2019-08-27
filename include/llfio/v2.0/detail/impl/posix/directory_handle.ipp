@@ -76,7 +76,7 @@ result<directory_handle> directory_handle::directory(const path_handle &base, pa
     // really ought to be cloning the handle. But let's humour him.
     path = ".";
   }
-  path_view::c_str zpath(path);
+  path_view::c_str<> zpath(path);
   if(base.is_valid())
   {
     if(_creation == creation::if_needed || _creation == creation::only_if_not_exist)
@@ -217,7 +217,7 @@ result<directory_handle::buffers_type> directory_handle::read(io_request<buffers
     return std::move(req.buffers);
   }
   // Is glob a single entry match? If so, this is really a stat call
-  path_view_type::c_str zglob(req.glob);
+  path_view_type::c_str<> zglob(req.glob);
   if(!req.glob.empty() && !req.glob.contains_glob())
   {
     struct stat s

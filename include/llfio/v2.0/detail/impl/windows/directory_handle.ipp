@@ -74,7 +74,7 @@ result<directory_handle> directory_handle::directory(const path_handle &base, pa
     ntflags |= 0x01 /*FILE_DIRECTORY_FILE*/;  // required to open a directory
     IO_STATUS_BLOCK isb = make_iostatus();
 
-    path_view::c_str zpath(path, true);
+    path_view::c_str<> zpath(path, true);
     UNICODE_STRING _path{};
     _path.Buffer = const_cast<wchar_t *>(zpath.buffer);
     _path.MaximumLength = (_path.Length = static_cast<USHORT>(zpath.length * sizeof(wchar_t))) + sizeof(wchar_t);
@@ -124,7 +124,7 @@ result<directory_handle> directory_handle::directory(const path_handle &base, pa
       break;
     }
     attribs |= FILE_FLAG_BACKUP_SEMANTICS;  // required to open a directory
-    path_view::c_str zpath(path, false);
+    path_view::c_str<> zpath(path, false);
     if(INVALID_HANDLE_VALUE == (nativeh.h = CreateFileW_(zpath.buffer, access, fileshare, nullptr, creation, attribs, nullptr, true)))  // NOLINT
     {
       DWORD errcode = GetLastError();
@@ -220,7 +220,7 @@ result<directory_handle::buffers_type> directory_handle::read(io_request<buffers
   }
   UNICODE_STRING _glob{};
   memset(&_glob, 0, sizeof(_glob));
-  path_view_type::c_str zglob(req.glob, true);
+  path_view_type::c_str<> zglob(req.glob, true);
   if(!req.glob.empty())
   {
     _glob.Buffer = const_cast<wchar_t *>(zglob.buffer);

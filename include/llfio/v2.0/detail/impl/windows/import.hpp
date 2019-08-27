@@ -338,6 +338,8 @@ namespace windows_nt_kernel
 
   using RtlOemStringToUnicodeString_t = NTSTATUS(NTAPI *)(PUNICODE_STRING DestinationString, PCOEM_STRING SourceString, BOOLEAN AllocateDestinationString);
 
+  using RtlFreeUnicodeString_t = NTSTATUS(NTAPI *)(PUNICODE_STRING String);
+
   typedef struct _FILE_BASIC_INFORMATION  // NOLINT
   {
     LARGE_INTEGER CreationTime;
@@ -565,6 +567,7 @@ namespace windows_nt_kernel
   static RtlUnicodeToUTF8N_t RtlUnicodeToUTF8N;
   static RtlAnsiStringToUnicodeString_t RtlAnsiStringToUnicodeString;
   static RtlOemStringToUnicodeString_t RtlOemStringToUnicodeString;
+  static RtlFreeUnicodeString_t RtlFreeUnicodeString;
 
   
 #ifdef _MSC_VER
@@ -574,7 +577,7 @@ namespace windows_nt_kernel
 #endif
   inline void doinit()
   {
-    if(RtlUTF8ToUnicodeN != nullptr)
+    if(RtlFreeUnicodeString != nullptr)
     {
       return;
     }
@@ -844,7 +847,14 @@ namespace windows_nt_kernel
         abort();
       }
     }
-
+    if(RtlFreeUnicodeString == nullptr)
+    {
+      if((RtlFreeUnicodeString = reinterpret_cast<RtlFreeUnicodeString_t>(GetProcAddress(ntdllh, "RtlFreeUnicodeString"))) == nullptr)
+      {
+        abort();
+      }
+    }
+    
     // MAKE SURE you update the early exit check at the top to whatever the last of these is!
   }
 #ifdef _MSC_VER

@@ -128,7 +128,7 @@ private:
     const char8_t *_char8str;
     const char16_t *_char16str;
   };
-  size_t _length{0};
+  size_t _length{0};  // in characters, excluding any zero terminator
   unsigned _zero_terminated : 1;
   unsigned _passthrough : 1;
   unsigned _char : 1;
@@ -466,6 +466,132 @@ public:
   LLFIO_TEMPLATE(class Char)
   LLFIO_TREQUIRES(LLFIO_TPRED(path_view_component::_is_constructible<Char>))
   constexpr int compare(const basic_string_view<Char> s) const noexcept { return compare(path_view_component(s)); }
+
+  /*! Instantiate from a `path_view_component` to get a path suitable for feeding to other code.
+  \tparam T The destination encoding required.
+  \tparam Deleter A custom deleter for any temporary buffer.
+  \tparam disable_internal_buffer Set to true to disable the internal temporary buffer, thus
+  reducing stack space consumption (most compilers optimise away the internal temporary buffer
+  if it can be proved it will never be used).
+
+  This makes the input to the path view component into a destination format suitable for
+  consumption by other code. If the source has the same format as the destination, and
+  the zero termination requirements are the same, the source is used directly without
+  memory copying nor reencoding.
+
+  If the format is compatible, but the destination requires zero termination,
+  and the source is not zero terminated, a straight memory copy is performed
+  into the temporary buffer.
+
+  `c_str` contains a 4Kb internal temporary buffer. Output below that amount involves
+  no dynamic memory allocation. Output above that amount calls `operator new[]`. You
+  can use an externally supplied larger temporary buffer to avoid dynamic memory
+  allocation in all situations.
+  */
+  template <class T = typename filesystem::path::value_type, class Deleter = std::default_delete<T[]>, bool disable_internal_buffer = false> struct c_str
+  {
+    static_assert(_is_constructible<T>, "path_view_component::c_str<T> does not have a T which is one of byte, char, wchar_t, char8_t nor char16_t");
+    //! Type of the value type
+    using value_type = T;
+    //! Type of the deleter
+    using deleter_type = Deleter;
+
+    //! Number of characters, excluding zero terminating char, at buffer
+    size_t length{0};
+    //! Pointer to the possibly-converted path
+    const value_type *buffer{nullptr};
+
+  private:
+    template <class U, class source_type> void _make_passthrough(const path_view_component & /*unused*/, bool /*unused*/, U & /*unused*/, source_type * /*unused*/) {}
+    template <class U> void _make_passthrough(const path_view_component &view, bool no_zero_terminate, U &allocate, value_type *source)
+    {
+      length = view._length;
+      if(no_zero_terminate || view._zero_terminated)
+      {
+        buffer = source;
+      }
+      else
+      {
+        const size_t required_length = view._length + (!no_zero_terminate - view._zero_terminated);
+        const size_t required_bytes = required_length * sizeof(value_type);
+        const size_t _buffer_bytes = sizeof(_buffer);
+        if(required_bytes <= _buffer_bytes)
+        {
+          buffer = _buffer;
+          memcpy(buffer, source, required_bytes);
+        }
+        else
+        {
+          buffer = allocate(required_length);
+          if(nullptr == buffer)
+          {
+            length = 0;
+          }
+          else
+          {
+            _call_deleter = true;
+          }
+        }
+      }
+    }
+
+  public:
+    /*! Construct, performing any reencoding or memory copying required.
+    \param view The path component view to use as source.
+    \param no_zero_terminate Set to true if zero termination is not required.
+    \param allocate A callable with prototype `value_type *(size_t length)` which
+    is defaulted to `return new value_type[length];`.
+    */
+    template <class U> c_str(const path_view_component &view, bool no_zero_terminate, U &&allocate)
+    {
+      if(std::is_same<T, byte>::value || view._passthrough)
+      {
+        length = view._length;
+        buffer = view._bytestr;
+        return;
+      }
+      if(std::is_same<T, char>::value && view._char)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._charstr);
+        return;
+      }
+      if(std::is_same<T, wchar_t>::value && view._wchar)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._wcharstr);
+        return;
+      }
+      if(std::is_same<T, char8_t>::value && view._utf8)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._char8str);
+        return;
+      }
+      if(std::is_same<T, char16_t>::value && view._utf16)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._char16str);
+        return;
+      }
+      // A reencoding is required
+      todo;
+    }
+    //! \overload
+    c_str(const path_view_component &view, bool no_zero_terminate = false)
+        : c_str(view, no_zero_terminate, [](size_t length) { return new value_type[length]; })
+    {
+    }
+    ~c_str() = default;
+    c_str(const c_str &) = delete;
+    c_str(c_str &&) = delete;
+    c_str &operator=(const c_str &) = delete;
+    c_str &operator=(c_str &&) = delete;
+
+  private:
+    bool _call_deleter{false};
+    Deleter _deleter;
+    // MAKE SURE this is the final item in storage, the compiler will elide the storage
+    // under optimisation if it can prove it is never used.
+    value_type _buffer[disable_internal_buffer ? 1 : (4096 / sizeof(value_type))]{};
+  };
+  template <class, class, bool> friend struct c_str;
 };
 
 
@@ -553,7 +679,7 @@ routine.
 If however you are taking input from some external piece of code, then for
 maximum compatibility you should still use the Win32 API.
 */
-class LLFIO_DECL path_view
+class path_view
 {
 public:
   friend class detail::path_view_iterator;
@@ -913,98 +1039,24 @@ public:
   LLFIO_TREQUIRES(LLFIO_TPRED(path_view_component::_is_constructible<Char>))
   constexpr int compare(const basic_string_view<Char> s) const noexcept { return _state.compare(s); }
 
-  //! Instantiate from a `path_view` to get a zero terminated path suitable for feeding to the kernel
-  struct LLFIO_DECL c_str
+  //! Instantiate from a `path_view` to get a path suitable for feeding to other code. See `path_view_component::c_str`.
+  template <class T = typename filesystem::path::value_type, class Deleter = std::default_delete<T[]>, bool disable_internal_buffer = false> struct c_str : path_view_component::c_str<T, Deleter, disable_internal_buffer>
   {
-    //! Number of characters, excluding zero terminating char, at buffer
-    uint16_t length{0};
-    const filesystem::path::value_type *buffer{nullptr};
-
-#ifdef _WIN32
-    c_str(const path_view &view, bool ntkernelapi) noexcept
+    using _base = path_view_component::c_str<T, Deleter, disable_internal_buffer>;
+    /*! See constructor for `path_view_component::c_str`.
+    */
+    template <class U>
+    c_str(const path_view &view, bool no_zero_terminate, U &&allocate)
+        : _base(view._state, no_zero_terminate, static_cast<U &&>(allocate))
     {
-      if(!view._state._utf16.empty())
-      {
-        if(view._state._utf16.size() > 32768)
-        {
-          LLFIO_LOG_FATAL(&view, "Attempt to send a path exceeding 64Kb to kernel");
-          abort();
-        }
-        length = static_cast<uint16_t>(view._state._utf16.size());
-        // Is this going straight to a NT kernel API? If so, use directly
-        if(ntkernelapi)
-        {
-          buffer = view._state._utf16.data();
-          return;
-        }
-        // Is the byte just after the view a zero? If so, use directly
-        if(0 == view._state._utf16.data()[length])
-        {
-          buffer = view._state._utf16.data();
-          return;
-        }
-        // Otherwise use _buffer and zero terminate.
-        if(length > sizeof(_buffer) - 1)
-        {
-          LLFIO_LOG_FATAL(&view, "Attempt to send a path exceeding 64Kb to kernel");
-          abort();
-        }
-        memcpy(_buffer, view._state._utf16.data(), length);
-        _buffer[length] = 0;
-        buffer = _buffer;
-        return;
-      }
-      if(!view._state._utf8.empty())
-      {
-        _from_utf8(view);
-        return;
-      }
-#else
-    c_str(const path_view &view) noexcept  // NOLINT
-    {
-      if(!view._state._utf8.empty())
-      {
-        if(view._state._utf8.size() > 32768)
-        {
-          LLFIO_LOG_FATAL(&view, "Attempt to send a path exceeding 64Kb to kernel");
-          abort();
-        }
-        length = static_cast<uint16_t>(view._state._utf8.size());
-        // Is the byte just after the view a zero? If so, use directly
-        if(0 == view._state._utf8.data()[length])
-        {
-          buffer = view._state._utf8.data();
-          return;
-        }
-        // Otherwise use _buffer and zero terminate.
-        if(length > sizeof(_buffer) - 1)
-        {
-          LLFIO_LOG_FATAL(&view, "Attempt to send a path exceeding 32Kb to kernel");
-          abort();
-        }
-        memcpy(_buffer, view._state._utf8.data(), length);
-        _buffer[length] = 0;
-        buffer = _buffer;
-        return;
-      }
-#endif
-      length = 0;
-      _buffer[0] = 0;
-      buffer = _buffer;
     }
-    ~c_str() = default;
-    c_str(const c_str &) = delete;
-    c_str(c_str &&) = delete;
-    c_str &operator=(const c_str &) = delete;
-    c_str &operator=(c_str &&) = delete;
-
-  private:
-    filesystem::path::value_type _buffer[32768]{};
-#ifdef _WIN32
-    LLFIO_HEADERS_ONLY_MEMFUNC_SPEC void _from_utf8(const path_view &view) noexcept;
-#endif
+    //! \overload
+    c_str(const path_view &view, bool no_zero_terminate = false)
+        : _base(view._state, no_zero_terminate)
+    {
+    }
   };
-  friend struct c_str;
+  template <class, class, bool> friend struct c_str;
 };
 inline constexpr bool operator==(path_view x, path_view y) noexcept
 {
@@ -1045,12 +1097,12 @@ inline std::ostream &operator<<(std::ostream &s, const path_view &v)
 
 namespace detail
 {
-  template <class T> class fake_pointer
+  template <class T> class value_pointer_fascade
   {
     T _v;
 
   public:
-    constexpr fake_pointer(T o)
+    constexpr value_pointer_fascade(T o)
         : _v(o)
     {
     }
@@ -1071,9 +1123,9 @@ namespace detail
     //! Const reference type
     using const_reference = const value_type;
     //! Pointer type
-    using pointer = fake_pointer<value_type>;
+    using pointer = value_pointer_fascade<value_type>;
     //! Const pointer type
-    using const_pointer = fake_pointer<const value_type>;
+    using const_pointer = value_pointer_fascade<const value_type>;
     //! Size type
     using size_type = size_t;
 

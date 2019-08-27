@@ -33,7 +33,12 @@ LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<path_view_component::char8_t[]> 
   using namespace windows_nt_kernel;
   ANSI_STRING astr;
   astr.Buffer = (char *) _charstr;
-  astr.Length = astr.MaximumLength = _length;
+  if(_length > 65535)
+  {
+    LLFIO_LOG_FATAL(this, "path_view_component::_ansi_path_to_utf8() cannot convert path sources larger than 65535");
+    abort();
+  }
+  astr.Length = astr.MaximumLength = (USHORT) _length;
   UNICODE_STRING ustr;
   NTSTATUS ntstat = AreFileApisANSI() ? RtlAnsiStringToUnicodeString(&ustr, &astr, true) : RtlOemStringToUnicodeString(&ustr, &astr, true);
   if(ntstat < 0)
@@ -57,13 +62,14 @@ LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<path_view_component::char8_t[]> 
     {
       p[actualbytecount] = 0;
       p[maxbytecount] = 0;
-      out = {p, actualbytecount      };
+      out = {p, actualbytecount};
     }
   }
   RtlFreeUnicodeString(&ustr);
   return ret;
 }
 
+#if 0
 LLFIO_HEADERS_ONLY_MEMFUNC_SPEC void path_view::c_str::_from_utf8(const path_view &view) noexcept
 {
   windows_nt_kernel::init();
@@ -88,5 +94,6 @@ LLFIO_HEADERS_ONLY_MEMFUNC_SPEC void path_view::c_str::_from_utf8(const path_vie
   } while(p != nullptr);
   buffer = _buffer;
 }
+#endif
 
 LLFIO_V2_NAMESPACE_END
