@@ -224,7 +224,7 @@ result<directory_handle::buffers_type> directory_handle::read(io_request<buffers
   if(!req.glob.empty())
   {
     _glob.Buffer = const_cast<wchar_t *>(zglob.buffer);
-    _glob.Length = zglob.length * sizeof(wchar_t);
+    _glob.Length = (USHORT)(zglob.length * sizeof(wchar_t));
     _glob.MaximumLength = _glob.Length + sizeof(wchar_t);
   }
   if(!req.buffers._kernel_buffer && req.kernelbuffer.empty())
@@ -284,13 +284,17 @@ result<directory_handle::buffers_type> directory_handle::read(io_request<buffers
         continue;
       }
     }
+    directory_entry &item = req.buffers[n];
     // Try to zero terminate leafnames where possible for later efficiency
     if(reinterpret_cast<uintptr_t>(ffdi->FileName + length) + sizeof(wchar_t) <= reinterpret_cast<uintptr_t>(ffdi) + ffdi->NextEntryOffset)
     {
       ffdi->FileName[length] = 0;
+      item.leafname = path_view_type(ffdi->FileName, length, true);
     }
-    directory_entry &item = req.buffers[n];
-    item.leafname = path_view(wstring_view(ffdi->FileName, length));
+    else
+    {
+      item.leafname = path_view_type(ffdi->FileName, length, false);
+    }
     if(req.filtering == filter::fastdeleted && item.leafname.is_llfio_deleted())
     {
       continue;

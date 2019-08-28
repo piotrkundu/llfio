@@ -329,14 +329,9 @@ private:
     }
     ~_codecvt() {}
   };
-  template <class CharT> static _codecvt<CharT, char> &_to_utf8(basic_string_view<CharT> /*unused*/) noexcept
+  template <class InT, class OutT> static _codecvt<InT, OutT> &_get_codecvt() noexcept
   {
-    static _codecvt<CharT, char> ret;
-    return ret;
-  }
-  static _codecvt<char, char> &_to_utf8(basic_string_view<char8_t> /*unused*/) noexcept
-  {
-    static _codecvt<char, char> ret;
+    static _codecvt<InT, OutT> ret;
     return ret;
   }
   template <class CharT> static int _compare(basic_string_view<CharT> a, basic_string_view<CharT> b) noexcept { return a.compare(b); }
@@ -363,8 +358,8 @@ private:
   {
     static constexpr size_t codepoints_at_a_time = 8 * 4;
     // Convert both to utf8, then to utf32, and compare
-    auto &convert_a = _to_utf8(a);
-    auto &convert_b = _to_utf8(b);
+    auto &convert_a = _get_codecvt<Char1T, char8_t>();
+    auto &convert_b = _get_codecvt<Char2T, char8_t>();
     std::mbstate_t a_state{}, b_state{};
     auto *a_ptr = a.data();
     auto *b_ptr = b.data();
@@ -374,6 +369,14 @@ private:
       char a_out[codepoints_at_a_time + 1], b_out[codepoints_at_a_time + 1], *a_out_end = a_out, *b_out_end = b_out;
       auto a_result = convert_a.out(a_state, a_ptr, &a.back() + 1, a_ptr, a_out, a_out + codepoints_at_a_time, a_out_end);
       auto b_result = convert_b.out(b_state, b_ptr, &b.back() + 1, b_ptr, b_out, b_out + codepoints_at_a_time, b_out_end);
+      assert(std::codecvt_base::noconv != a_result);
+      if(std::codecvt_base::noconv == a_result)
+      {
+        size_t tocopy = std::min(codepoints_at_a_time, &a.back() + 1 - a_ptr);
+        memcpy(a_out, a_ptr, tocopy);
+        a_out_end = a_out + tocopy;
+        a_ptr += tocopy;
+      }
       if(std::codecvt_base::partial == a_result && a_out_end == a_out + codepoints_at_a_time)
       {
         // Needs one more character from input
@@ -384,6 +387,14 @@ private:
       {
         assert(false);
         return -99;
+      }
+      assert(std::codecvt_base::noconv != b_result);
+      if(std::codecvt_base::noconv == b_result)
+      {
+        size_t tocopy = std::min(codepoints_at_a_time, &b.back() + 1 - b_ptr);
+        memcpy(b_out, b_ptr, tocopy);
+        b_out_end = b_out + tocopy;
+        b_ptr += tocopy;
       }
       if(std::codecvt_base::partial == b_result && b_out_end == b_out + codepoints_at_a_time)
       {
@@ -409,7 +420,7 @@ private:
       const char *a_out_end_ = a_out_end, *b_out_end_ = b_out_end;
       char32_t a32[codepoints_at_a_time + 1], b32[codepoints_at_a_time + 1], *a32_end = a32, *b32_end = b32;
       std::mbstate_t a32_state{}, b32_state{};
-      auto &convert32 = _to_utf8(basic_string_view<char32_t>());
+      auto &convert32 = _get_codecvt<char32_t, char8_t>();
       convert32.in(a32_state, a_out, a_out_end, a_out_end_, a32, a32 + codepoints_at_a_time + 1, a32_end);
       convert32.in(b32_state, b_out, b_out_end, b_out_end_, b32, b32 + codepoints_at_a_time + 1, b32_end);
       if((a32_end - a32) < (b32_end - b32))
@@ -515,6 +526,13 @@ public:
         const size_t required_length = view._length + (!no_zero_terminate - view._zero_terminated);
         const size_t required_bytes = required_length * sizeof(value_type);
         const size_t _buffer_bytes = sizeof(_buffer);
+        #ifdef _WIN32
+        if(required_bytes > 65535)
+        {
+          LLFIO_LOG_FATAL(nullptr, "Paths exceeding 64Kb are impossible on Microsoft Windows");
+          abort();
+        }
+        #endif
         if(required_bytes <= _buffer_bytes)
         {
           buffer = _buffer;
@@ -540,7 +558,14 @@ public:
     \param view The path component view to use as source.
     \param no_zero_terminate Set to true if zero termination is not required.
     \param allocate A callable with prototype `value_type *(size_t length)` which
-    is defaulted to `return new value_type[length];`.
+    is defaulted to `return new value_type[length];`. You can return `nullptr` if
+    you wish, the consumer of `c_str` will see a `buffer` set to `nullptr`.
+
+    If an error occurs during any conversion from UTF-8 or UTF-16, an exception of
+    `system_error(errc::illegal_byte_sequence)` is thrown.
+    This is because if you tell `path_view` that its source is UTF-8 or UTF-16, then that
+    must be **valid** UTF. If you wish to supply UTF-invalid paths (which are legal
+    on most filesystems), use native narrow or wide encoded source, or binary.
     */
     template <class U> c_str(const path_view_component &view, bool no_zero_terminate, U &&allocate)
     {
@@ -570,8 +595,89 @@ public:
         _make_passthrough(view, no_zero_terminate, allocate, view._char16str);
         return;
       }
+#ifdef _WIN32
+      // On Windows, consider char16_t input equivalent to wchar_t
+      if(std::is_same<T, wchar_t>::value && view._utf16)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._wcharstr);
+        return;
+      }
+#else
+      // On POSIX, consider char8_t input equivalent to char
+      if(std::is_same<T, char>::value && view._utf8)
+      {
+        _make_passthrough(view, no_zero_terminate, allocate, view._charstr);
+        return;
+      }
+#endif
       // A reencoding is required
-      todo;
+      view._invoke([&](auto src) { 
+        using src_value_type = typename decltype(src)::value_type;
+        auto &convert = view._get_codecvt<src_value_type, value_type>();
+        std::mbstate_t cstate{};
+        auto *src_ptr = src.data();
+        auto *dest_ptr = _buffer;
+        if(!disable_internal_buffer)
+        {
+          // First try the internal buffer, if we overflow, fall back to the allocator
+          auto result = convert.out(cstate, src_ptr, &src.back() + 1, src_ptr, dest_ptr, _buffer + sizeof(_buffer) / sizeof(value_type) - 1, dest_ptr);
+          assert(std::codecvt_base::noconv != result);
+          if(std::codecvt_base::noconv == result)
+          {
+            LLFIO_LOG_FATAL(nullptr, "path_view_component::c_str should never do identity reencoding");
+            abort();
+          }
+          if(std::codecvt_base::error == result)
+          {
+            throw std::system_error(std::errc::illegal_byte_sequence);
+          }
+          if(std::codecvt_base::ok == result)
+          {
+            *dest_ptr = 0;
+            length = dest_ptr - _buffer;
+            buffer = _buffer;
+            return;
+          }
+        }
+        // This is a bit crap, but codecvt is hardly the epitome of good design :(
+        const size_t required_length = convert.max_length() * (1+view.native_size());
+        const size_t required_bytes = required_length * sizeof(value_type);
+#ifdef _WIN32
+        if(required_bytes > 65535)
+        {
+          LLFIO_LOG_FATAL(nullptr, "Paths exceeding 64Kb are impossible on Microsoft Windows");
+          abort();
+        }
+#endif
+        buffer = allocate(required_length);
+        if(nullptr == buffer)
+        {
+          length = 0;
+          return;
+        }
+          _call_deleter = true;
+        memcpy(buffer, _buffer, dest_ptr - _buffer);
+        dest_ptr = buffer + (dest_ptr - _buffer);
+        auto result = convert.out(cstate, src_ptr, &src.back() + 1, src_ptr, dest_ptr, buffer + required_length-1, dest_ptr);
+        assert(std::codecvt_base::noconv != result);
+        if(std::codecvt_base::noconv == result)
+        {
+          LLFIO_LOG_FATAL(nullptr, "path_view_component::c_str should never do identity reencoding");
+          abort();
+        }
+        if(std::codecvt_base::error == result)
+        {
+          throw std::system_error(std::errc::illegal_byte_sequence);
+        }
+        assert(std::codecvt_base::ok == result);
+        if(std::codecvt_base::ok != result)
+        {
+          LLFIO_LOG_FATAL(nullptr, "path_view_component::c_str should never experience partial conversion");
+          abort();
+        }
+        *dest_ptr = 0;
+        length = dest_ptr - buffer;
+      });
     }
     //! \overload
     c_str(const path_view_component &view, bool no_zero_terminate = false)

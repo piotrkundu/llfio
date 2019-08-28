@@ -184,11 +184,11 @@ result<symlink_handle::buffers_type> symlink_handle::read(symlink_handle::io_req
     switch(rpd->ReparseTag)
     {
     case IO_REPARSE_TAG_MOUNT_POINT:
-      tofill._link = path_view(rpd->MountPointReparseBuffer.PathBuffer + rpd->MountPointReparseBuffer.SubstituteNameOffset / sizeof(rpd->MountPointReparseBuffer.PathBuffer[0]), rpd->MountPointReparseBuffer.SubstituteNameLength / sizeof(rpd->MountPointReparseBuffer.PathBuffer[0]));
+      tofill._link = path_view(rpd->MountPointReparseBuffer.PathBuffer + rpd->MountPointReparseBuffer.SubstituteNameOffset / sizeof(rpd->MountPointReparseBuffer.PathBuffer[0]), rpd->MountPointReparseBuffer.SubstituteNameLength / sizeof(rpd->MountPointReparseBuffer.PathBuffer[0]), true);
       tofill._type = symlink_type::win_junction;
       return std::move(tofill);
     case IO_REPARSE_TAG_SYMLINK:
-      tofill._link = path_view(rpd->SymbolicLinkReparseBuffer.PathBuffer + rpd->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(rpd->SymbolicLinkReparseBuffer.PathBuffer[0]), rpd->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(rpd->SymbolicLinkReparseBuffer.PathBuffer[0]));
+      tofill._link = path_view(rpd->SymbolicLinkReparseBuffer.PathBuffer + rpd->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(rpd->SymbolicLinkReparseBuffer.PathBuffer[0]), rpd->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(rpd->SymbolicLinkReparseBuffer.PathBuffer[0]), true);
       tofill._type = symlink_type::symbolic;
       return std::move(tofill);
     }

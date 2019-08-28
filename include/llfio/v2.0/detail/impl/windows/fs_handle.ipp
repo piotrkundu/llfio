@@ -148,7 +148,7 @@ result<void> fs_handle::relink(const path_handle &base, path_view_type path, boo
       }
     });
     // RtlDosPathNameToNtPathName_U outputs \??\path, so path.is_ntpath() will be false.
-    return relink(base, wstring_view(NtPath.Buffer, NtPath.Length / sizeof(wchar_t)));
+    return relink(base, path_view_type(NtPath.Buffer, NtPath.Length / sizeof(wchar_t), false));
   }
 
   path_view::c_str<> zpath(path, true);
