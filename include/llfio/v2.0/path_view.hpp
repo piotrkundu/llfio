@@ -50,6 +50,7 @@ namespace detail
     }
     return e - s;
   }
+
 #if !defined(__CHAR8_TYPE__) && __cplusplus < 20200000
   struct char8_t
   {
@@ -74,6 +75,7 @@ namespace detail
   {
   };
 #endif
+
   template <class T> struct is_path_view_component_source_type : std::false_type
   {
   };
@@ -92,6 +94,31 @@ namespace detail
   template <> struct is_path_view_component_source_type<char16_t> : std::true_type
   {
   };
+
+  template <class T> inline T *cast_char8_t_ptr(T *v) { return v; }
+  template <class InternT, class ExternT> struct _codecvt : std::codecvt<InternT, ExternT, std::mbstate_t>
+  {
+    template <class... Args>
+    _codecvt(Args &&... args)
+        : std::codecvt<InternT, ExternT, std::mbstate_t>(std::forward<Args>(args)...)
+    {
+    }
+    ~_codecvt() {}
+  };
+#if !defined(__CHAR8_TYPE__) && __cplusplus < 20200000
+  inline const char *cast_char8_t_ptr(const char8_t *v) { return (const char *) v; }
+  inline char *cast_char8_t_ptr(char8_t *v) { return (char *) v; }
+  template <> struct _codecvt<char8_t, char> : std::codecvt<char, char, std::mbstate_t>
+  {
+    template <class... Args>
+    _codecvt(Args &&... args)
+        : std::codecvt<char, char, std::mbstate_t>(std::forward<Args>(args)...)
+    {
+    }
+    ~_codecvt() {}
+  };
+#endif
+
   class path_view_iterator;
 }  // namespace detail
 
@@ -317,34 +344,25 @@ public:
   }
 
 private:
-  template <class CharT> static filesystem::path _path_from_char_array(CharT *d, size_t l) { return {d, l}; }
-  static filesystem::path _path_from_char_array(const char8_t *d, size_t l) { return filesystem::u8path((const char *) d, (const char *) d + l); }
+  template <class CharT> static filesystem::path _path_from_char_array(basic_string_view<CharT> v) { return {v.data(), v.data() + v.size()}; }
+  static filesystem::path _path_from_char_array(basic_string_view<char8_t> v) { return filesystem::u8path((const char *) v.data(), (const char *) v.data() + v.size()); }
 
-  template <class InternT, class ExternT> struct _codecvt : std::codecvt<InternT, ExternT, std::mbstate_t>
+  template <class InT, class OutT> static detail::_codecvt<InT, OutT> &_get_codecvt() noexcept
   {
-    template <class... Args>
-    _codecvt(Args &&... args)
-        : std::codecvt<InternT, ExternT, std::mbstate_t>(std::forward<Args>(args)...)
-    {
-    }
-    ~_codecvt() {}
-  };
-  template <class InT, class OutT> static _codecvt<InT, OutT> &_get_codecvt() noexcept
-  {
-    static _codecvt<InT, OutT> ret;
+    static detail::_codecvt<InT, OutT> ret;
     return ret;
   }
   template <class CharT> static int _compare(basic_string_view<CharT> a, basic_string_view<CharT> b) noexcept { return a.compare(b); }
 #ifdef _WIN32
   // On Windows only, char is the native narrow encoding, which is locale dependent
-  LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<char8_t[]> _ansi_path_to_utf8(basic_string_view<char8_t> &out) noexcept;
+  static LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<char8_t[]> _ansi_path_to_utf8(basic_string_view<char8_t> &out, basic_string_view<char> in) noexcept;
   static int _compare(basic_string_view<char> a, basic_string_view<char> b) noexcept { return a.compare(b); }
   template <class CharT> static int _compare(basic_string_view<CharT> a, basic_string_view<char> b) noexcept { return -_compare(b, a); }
   template <class CharT> static int _compare(basic_string_view<char> a, basic_string_view<CharT> b) noexcept
   {
     // Convert a from native narrow encoding to utf8
     basic_string_view<char8_t> a_utf8;
-    auto h = _ansi_path_to_utf8(a_utf8);
+    auto h = _ansi_path_to_utf8(a_utf8, a);
     if(!h)
     {
       // Failure to allocate memory, or convert
@@ -358,21 +376,28 @@ private:
   {
     static constexpr size_t codepoints_at_a_time = 8 * 4;
     // Convert both to utf8, then to utf32, and compare
-    auto &convert_a = _get_codecvt<Char1T, char8_t>();
-    auto &convert_b = _get_codecvt<Char2T, char8_t>();
+#if !defined(__CHAR8_TYPE__) && __cplusplus < 20200000
+    using utf8_type = char;
+#else
+    using utf8_type = char8_t;
+#endif
+    auto &convert_a = _get_codecvt<Char1T, utf8_type>();
+    auto &convert_b = _get_codecvt<Char2T, utf8_type>();
     std::mbstate_t a_state{}, b_state{};
-    auto *a_ptr = a.data();
-    auto *b_ptr = b.data();
-    while(a_ptr <= &a.back() && b_ptr <= &b.back())
+    auto *a_ptr = detail::cast_char8_t_ptr(a.data());
+    auto *b_ptr = detail::cast_char8_t_ptr(b.data());
+    const auto *a_back = detail::cast_char8_t_ptr(&a.back());
+    const auto *b_back = detail::cast_char8_t_ptr(&b.back());
+    while(a_ptr <= a_back && b_ptr <= b_back)
     {
       // Try to convert 5 to 32 chars at a time
-      char a_out[codepoints_at_a_time + 1], b_out[codepoints_at_a_time + 1], *a_out_end = a_out, *b_out_end = b_out;
-      auto a_result = convert_a.out(a_state, a_ptr, &a.back() + 1, a_ptr, a_out, a_out + codepoints_at_a_time, a_out_end);
-      auto b_result = convert_b.out(b_state, b_ptr, &b.back() + 1, b_ptr, b_out, b_out + codepoints_at_a_time, b_out_end);
+      utf8_type a_out[codepoints_at_a_time + 1], b_out[codepoints_at_a_time + 1], *a_out_end = a_out, *b_out_end = b_out;
+      auto a_result = convert_a.out(a_state, a_ptr, a_back + 1, a_ptr, a_out, a_out + codepoints_at_a_time, a_out_end);
+      auto b_result = convert_b.out(b_state, b_ptr, b_back + 1, b_ptr, b_out, b_out + codepoints_at_a_time, b_out_end);
       assert(std::codecvt_base::noconv != a_result);
       if(std::codecvt_base::noconv == a_result)
       {
-        size_t tocopy = std::min(codepoints_at_a_time, &a.back() + 1 - a_ptr);
+        size_t tocopy = std::min(codepoints_at_a_time, (size_t)(a_back + 1 - a_ptr));
         memcpy(a_out, a_ptr, tocopy);
         a_out_end = a_out + tocopy;
         a_ptr += tocopy;
@@ -391,7 +416,7 @@ private:
       assert(std::codecvt_base::noconv != b_result);
       if(std::codecvt_base::noconv == b_result)
       {
-        size_t tocopy = std::min(codepoints_at_a_time, &b.back() + 1 - b_ptr);
+        size_t tocopy = std::min(codepoints_at_a_time, (size_t)(b_back + 1 - b_ptr));
         memcpy(b_out, b_ptr, tocopy);
         b_out_end = b_out + tocopy;
         b_ptr += tocopy;
@@ -417,10 +442,10 @@ private:
       }
 #if !defined(__CHAR8_TYPE__) && __cplusplus < 20200000
       // Before C++ 20, no facility to char_traits::compare utf8, so convert to utf32
-      const char *a_out_end_ = a_out_end, *b_out_end_ = b_out_end;
+      const utf8_type *a_out_end_ = a_out_end, *b_out_end_ = b_out_end;
       char32_t a32[codepoints_at_a_time + 1], b32[codepoints_at_a_time + 1], *a32_end = a32, *b32_end = b32;
       std::mbstate_t a32_state{}, b32_state{};
-      auto &convert32 = _get_codecvt<char32_t, char8_t>();
+      auto &convert32 = _get_codecvt<char32_t, char>();
       convert32.in(a32_state, a_out, a_out_end, a_out_end_, a32, a32 + codepoints_at_a_time + 1, a32_end);
       convert32.in(b32_state, b_out, b_out_end, b_out_end_, b32, b32 + codepoints_at_a_time + 1, b32_end);
       if((a32_end - a32) < (b32_end - b32))
@@ -440,11 +465,11 @@ private:
         return ret;
       }
     }
-    if(a_ptr >= &a.back())
+    if(a_ptr >= a_back)
     {
       return -2;
     }
-    if(b_ptr >= &b.back())
+    if(b_ptr >= b_back)
     {
       return 2;
     }
@@ -455,7 +480,7 @@ public:
   //! Return the path view as a path. Allocates and copies memory!
   filesystem::path path() const
   {
-    return _invoke([](const auto &v) { return _path_from_char_array(v.data(), v.size()); });
+    return _invoke([](const auto &v) { return _path_from_char_array(v); });
   }
 
   /*! Compares the two path views for equivalence or ordering.
@@ -526,13 +551,13 @@ public:
         const size_t required_length = view._length + (!no_zero_terminate - view._zero_terminated);
         const size_t required_bytes = required_length * sizeof(value_type);
         const size_t _buffer_bytes = sizeof(_buffer);
-        #ifdef _WIN32
+#ifdef _WIN32
         if(required_bytes > 65535)
         {
           LLFIO_LOG_FATAL(nullptr, "Paths exceeding 64Kb are impossible on Microsoft Windows");
           abort();
         }
-        #endif
+#endif
         if(required_bytes <= _buffer_bytes)
         {
           buffer = _buffer;
@@ -554,6 +579,10 @@ public:
     }
 
   public:
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4127)  // conditional expression is constant
+#endif
     /*! Construct, performing any reencoding or memory copying required.
     \param view The path component view to use as source.
     \param no_zero_terminate Set to true if zero termination is not required.
@@ -572,7 +601,7 @@ public:
       if(std::is_same<T, byte>::value || view._passthrough)
       {
         length = view._length;
-        buffer = view._bytestr;
+        buffer = (const value_type *) view._bytestr;
         return;
       }
       if(std::is_same<T, char>::value && view._char)
@@ -611,7 +640,7 @@ public:
       }
 #endif
       // A reencoding is required
-      view._invoke([&](auto src) { 
+      view._invoke([&](auto src) {
         using src_value_type = typename decltype(src)::value_type;
         auto &convert = view._get_codecvt<src_value_type, value_type>();
         std::mbstate_t cstate{};
@@ -629,7 +658,7 @@ public:
           }
           if(std::codecvt_base::error == result)
           {
-            throw std::system_error(std::errc::illegal_byte_sequence);
+            throw std::system_error(make_error_code(std::errc::illegal_byte_sequence));
           }
           if(std::codecvt_base::ok == result)
           {
@@ -640,25 +669,26 @@ public:
           }
         }
         // This is a bit crap, but codecvt is hardly the epitome of good design :(
-        const size_t required_length = convert.max_length() * (1+view.native_size());
-        const size_t required_bytes = required_length * sizeof(value_type);
+        const size_t required_length = convert.max_length() * (1 + view.native_size());
 #ifdef _WIN32
+        const size_t required_bytes = required_length * sizeof(value_type);
         if(required_bytes > 65535)
         {
           LLFIO_LOG_FATAL(nullptr, "Paths exceeding 64Kb are impossible on Microsoft Windows");
           abort();
         }
 #endif
-        buffer = allocate(required_length);
-        if(nullptr == buffer)
+        auto *out = allocate(required_length);
+        buffer = out;
+        if(nullptr == out)
         {
           length = 0;
           return;
         }
-          _call_deleter = true;
-        memcpy(buffer, _buffer, dest_ptr - _buffer);
-        dest_ptr = buffer + (dest_ptr - _buffer);
-        auto result = convert.out(cstate, src_ptr, &src.back() + 1, src_ptr, dest_ptr, buffer + required_length-1, dest_ptr);
+        _call_deleter = true;
+        memcpy(out, _buffer, dest_ptr - _buffer);
+        dest_ptr = out + (dest_ptr - _buffer);
+        auto result = convert.out(cstate, src_ptr, &src.back() + 1, src_ptr, dest_ptr, out + required_length - 1, dest_ptr);
         assert(std::codecvt_base::noconv != result);
         if(std::codecvt_base::noconv == result)
         {
@@ -667,7 +697,7 @@ public:
         }
         if(std::codecvt_base::error == result)
         {
-          throw std::system_error(std::errc::illegal_byte_sequence);
+          throw std::system_error(std::make_error_code(std::errc::illegal_byte_sequence));
         }
         assert(std::codecvt_base::ok == result);
         if(std::codecvt_base::ok != result)
@@ -676,9 +706,12 @@ public:
           abort();
         }
         *dest_ptr = 0;
-        length = dest_ptr - buffer;
+        length = dest_ptr - out;
       });
     }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
     //! \overload
     c_str(const path_view_component &view, bool no_zero_terminate = false)
         : c_str(view, no_zero_terminate, [](size_t length) { return new value_type[length]; })
@@ -1150,7 +1183,7 @@ public:
   {
     using _base = path_view_component::c_str<T, Deleter, disable_internal_buffer>;
     /*! See constructor for `path_view_component::c_str`.
-    */
+     */
     template <class U>
     c_str(const path_view &view, bool no_zero_terminate, U &&allocate)
         : _base(view._state, no_zero_terminate, static_cast<U &&>(allocate))
@@ -1219,7 +1252,7 @@ namespace detail
   };
   class path_view_iterator
   {
-    friend class path_view;
+    friend class LLFIO_V2_NAMESPACE::path_view;
 
   public:
     //! Value type

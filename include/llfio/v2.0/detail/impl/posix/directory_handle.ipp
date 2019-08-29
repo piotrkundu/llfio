@@ -376,7 +376,7 @@ result<directory_handle::buffers_type> directory_handle::read(io_request<buffers
         goto cont;
       }
       directory_entry &item = req.buffers[n];
-      item.leafname = path_view(dent->d_name, length);
+      item.leafname = path_view(dent->d_name, length, true);
       item.stat = stat_t(nullptr);
       item.stat.st_ino = dent->d_ino;
       char d_type = dent->d_type;

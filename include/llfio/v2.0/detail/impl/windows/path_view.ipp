@@ -27,18 +27,18 @@ Distributed under the Boost Software License, Version 1.0.
 
 LLFIO_V2_NAMESPACE_BEGIN
 
-LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<path_view_component::char8_t[]> path_view_component::_ansi_path_to_utf8(basic_string_view<char8_t> &out) noexcept
+LLFIO_HEADERS_ONLY_MEMFUNC_SPEC std::unique_ptr<path_view_component::char8_t[]> path_view_component::_ansi_path_to_utf8(basic_string_view<char8_t> &out, basic_string_view<char> in) noexcept
 {
   windows_nt_kernel::init();
   using namespace windows_nt_kernel;
   ANSI_STRING astr;
-  astr.Buffer = (char *) _charstr;
-  if(_length > 65535)
+  astr.Buffer = const_cast<char *>(in.data());
+  if(in.size() > 65535)
   {
-    LLFIO_LOG_FATAL(this, "path_view_component::_ansi_path_to_utf8() cannot convert path sources larger than 65535");
+    LLFIO_LOG_FATAL(nullptr, "path_view_component::_ansi_path_to_utf8() cannot convert path sources larger than 65535");
     abort();
   }
-  astr.Length = astr.MaximumLength = (USHORT) _length;
+  astr.Length = astr.MaximumLength = (USHORT) in.size();
   UNICODE_STRING ustr;
   NTSTATUS ntstat = AreFileApisANSI() ? RtlAnsiStringToUnicodeString(&ustr, &astr, true) : RtlOemStringToUnicodeString(&ustr, &astr, true);
   if(ntstat < 0)
