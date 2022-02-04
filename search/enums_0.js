@@ -1,5 +1,4 @@
 var searchData=
 [
-  ['caching',['caching',['../classllfio__v2__xxx_1_1handle.html#aecd3a7db6cee3aec07d32fe6f99e6852',1,'llfio_v2_xxx::handle']]],
-  ['creation',['creation',['../classllfio__v2__xxx_1_1handle.html#af0b352d0f273ba6fa70c178b2c2fee42',1,'llfio_v2_xxx::handle']]]
+  ['barrier_5fkind_1475',['barrier_kind',['../classllfio__v2__xxx_1_1io__multiplexer.html#ace3fed6888ea1b5b6f1f641e2cf7cd26',1,'llfio_v2_xxx::io_multiplexer']]]
 ];
